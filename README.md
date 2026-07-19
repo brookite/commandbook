@@ -7,10 +7,6 @@ placeholders through a form — and Commandbook assembles and runs the command i
 right shell and working directory. The goal is to speed up command entry without
 memorizing detailed arguments.
 
-## Status
-
-In development. See [PLAN.md](PLAN.md) for the phased roadmap.
-
 ## Install (dev)
 
 ```sh
