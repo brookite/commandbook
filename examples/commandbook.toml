@@ -1,0 +1,86 @@
+# Example Commandbook configuration.
+# The application reads this file; it is edited by hand.
+
+[settings]
+# auto | bash | cmd | powershell
+shell = "auto"
+
+# Named variable groups reused across commands.
+# A placeholder whose name matches a variable here is offered as a dropdown.
+[variables.groups.aws]
+region = ["us-east-1", "eu-west-1"]
+
+# --- Command group: Docker ---
+[[groups]]
+name = "Docker"
+description = "Container image and runtime commands"
+tags = ["containers", "devops"]
+variables = "aws"          # which variable group is available to the commands
+# cwd = "C:/projects"      # main working directory for the group (optional)
+# search_dirs = ["C:/projects"]  # where to look for file/directory placeholders
+
+[[groups.commands]]
+id = "docker-build"
+name = "Build image"
+description = "Build a Docker image from a context directory"
+tags = ["build", "image"]
+# The optional segment [[ ... ]] is dropped when the placeholder is empty.
+template = "docker build -t ${tag}[[ -f ${dockerfile}]] ${context}"
+
+[[groups.commands.placeholders]]
+name = "tag"
+label = "Image tag"
+type = "string"
+
+[[groups.commands.placeholders]]
+name = "dockerfile"
+label = "Dockerfile"
+type = "file"
+optional = true
+
+[[groups.commands.placeholders]]
+name = "context"
+label = "Build context"
+type = "directory"
+default = "."
+
+# --- Command group: AWS (shows variable presets) ---
+[[groups]]
+name = "AWS"
+variables = "aws"
+
+[[groups.commands]]
+id = "aws-ec2-list"
+name = "List EC2 instances"
+tags = ["cloud", "ec2"]
+# "region" matches a variable in the "aws" group -> shown as a dropdown.
+template = "aws ec2 describe-instances --region ${region}[[ --filters ${filters}]]"
+
+[[groups.commands.placeholders]]
+name = "region"
+label = "Region"
+type = "string"
+
+[[groups.commands.placeholders]]
+name = "filters"
+label = "Raw filters (inserted as-is)"
+description = "Passed to the shell without quoting."
+type = "bare"
+optional = true
+
+# --- Command group: Git ---
+[[groups]]
+name = "Git"
+
+[[groups.commands]]
+id = "git-log"
+name = "Commit history"
+description = "Show recent commits in one-line format"
+tags = ["history", "vcs"]
+template = "git log --oneline[[ -n ${limit}]]"
+
+[[groups.commands.placeholders]]
+name = "limit"
+label = "How many commits"
+type = "int"
+optional = true
