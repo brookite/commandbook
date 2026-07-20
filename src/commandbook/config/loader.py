@@ -9,6 +9,7 @@ from typing import Any
 from commandbook.commands.builder import referenced_names
 from commandbook.config.models import (
     QUOTE_STYLES,
+    SEVERITIES,
     VALID_SHELLS,
     Command,
     Config,
@@ -138,12 +139,18 @@ def _parse_commands(raw: Any, *, group_name: str) -> list[Command]:
             )
 
         placeholders = _parse_placeholders(item.get("placeholders", []), cmd_id=cmd_id)
+        severity = _opt_str(item.get("severity")) or "none"
+        if severity not in SEVERITIES:
+            raise ConfigError(
+                f"command {cmd_id!r}: severity {severity!r} must be one of {', '.join(SEVERITIES)}"
+            )
         command = Command(
             id=str(cmd_id),
             name=str(cmd_name),
             template=template,
             description=_opt_str(item.get("description")) or "",
             tags=_parse_tags(item.get("tags"), where=f"command {cmd_id!r}"),
+            severity=severity,
             shells=shells,
             placeholders=placeholders,
             cwd=_opt_str(item.get("cwd")),

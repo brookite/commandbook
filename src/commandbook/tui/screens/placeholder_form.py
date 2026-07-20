@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from rich.markup import escape
+from textual import events
 from textual.app import ComposeResult
 from textual.containers import Horizontal, VerticalScroll
 from textual.screen import ModalScreen
@@ -42,7 +44,15 @@ class PlaceholderFormScreen(ModalScreen[Values | None]):
     def compose(self) -> ComposeResult:
         command = self.entry.command
         with VerticalScroll(id="form"):
-            yield Static(f"[b]{command.name}[/b]", id="form-title")
+            yield Static(escape(command.name), id="form-title")
+            metadata = [f"[dim cyan]#{escape(tag)}[/dim cyan]" for tag in command.tags]
+            if command.severity != "none":
+                style = "yellow" if command.severity == "medium" else "bold red"
+                metadata.append(f"[{style}]severity:{command.severity}[/{style}]")
+            if metadata:
+                yield Static("  ".join(metadata), id="form-tags")
+            if command.description:
+                yield Static(escape(command.description), id="form-description")
             for placeholder in command.placeholders:
                 yield from self._compose_field(placeholder)
             yield Static("", id="form-error")
@@ -108,6 +118,16 @@ class PlaceholderFormScreen(ModalScreen[Values | None]):
         # Pressing Enter in any field submits the whole form.
         self._submit()
 
+    def on_key(self, event: events.Key) -> None:
+        if event.key == "down":
+            self.focus_next("Input, Select, Checkbox, Button")
+        elif event.key == "up":
+            self.focus_previous("Input, Select, Checkbox, Button")
+        else:
+            return
+        event.stop()
+        event.prevent_default()
+
     def action_cancel(self) -> None:
         self.dismiss(None)
 
@@ -140,7 +160,9 @@ class PlaceholderFormScreen(ModalScreen[Values | None]):
     def _raw_value(widget: Field) -> str:
         if isinstance(widget, Select):
             return "" if widget.value is Select.BLANK else str(widget.value)
-        return widget.value.strip()
+        if isinstance(widget, Input):
+            return widget.value.strip()
+        raise TypeError("Checkbox values are handled before text extraction")
 
     def _show_error(self, message: str) -> None:
         self.query_one("#form-error", Static).update(f"[red]{message}[/red]")

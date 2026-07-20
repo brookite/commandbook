@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from textual.widgets import Input, OptionList
+from textual.widgets import Button, Input, OptionList, Static
 
 from commandbook.tui import app as app_module
 from commandbook.tui.app import CommandbookApp, default_config_path
+from commandbook.tui.screens.high_severity_confirm import HighSeverityConfirmScreen
+from commandbook.tui.screens.placeholder_form import PlaceholderFormScreen
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "commandbook.toml"
 
@@ -74,7 +76,7 @@ def test_app_toggle_groups_and_drill_and_back():
             assert [e.command.id for e in app._visible] == ["docker-build"]
 
             # Esc from the list goes back to the groups view.
-            app.action_back()
+            app.action_navigate_back()
             await pilot.pause()
             assert app._level == "groups"
 
@@ -115,6 +117,58 @@ def test_app_computes_presets_for_variable_placeholder():
         async with app.run_test():
             entry = next(e for e in app.registry.all() if e.command.id == "aws-ec2-list")
             assert app._presets_for(entry) == {"region": ["us-east-1", "eu-west-1"]}
+
+    _run(scenario())
+
+
+def test_form_shows_command_metadata_and_supports_arrow_navigation():
+    async def scenario() -> None:
+        app = CommandbookApp(config_path=EXAMPLE)
+        async with app.run_test() as pilot:
+            entry = next(e for e in app.registry.all() if e.command.id == "docker-build")
+            app._launch(entry)
+            await pilot.pause()
+
+            screen = app.screen
+            assert isinstance(screen, PlaceholderFormScreen)
+            assert str(screen.query_one("#form-title", Static).content) == "Build image"
+            assert "#build" in str(screen.query_one("#form-tags", Static).content)
+            assert "Build a Docker image" in str(
+                screen.query_one("#form-description", Static).content
+            )
+
+            tag = screen._inputs["tag"]
+            dockerfile = screen._inputs["dockerfile"]
+            tag.focus()
+            await pilot.press("down")
+            await pilot.pause()
+            assert app.focused is dockerfile
+            await pilot.press("up")
+            await pilot.pause()
+            assert app.focused is tag
+
+    _run(scenario())
+
+
+def test_high_severity_command_requires_confirmation(monkeypatch):
+    async def scenario() -> None:
+        app = CommandbookApp(config_path=EXAMPLE)
+        calls: list[tuple[object, dict[str, str | bool]]] = []
+        monkeypatch.setattr(app, "_run", lambda entry, values: calls.append((entry, values)))
+
+        async with app.run_test() as pilot:
+            entry = app.registry.all()[0]
+            entry.command.severity = "high"
+            app._confirm_or_run(entry, {"tag": "demo"})
+            await pilot.pause()
+
+            assert isinstance(app.screen, HighSeverityConfirmScreen)
+            assert app.focused is app.screen.query_one("#confirm-cancel", Button)
+            assert not calls
+
+            await pilot.click("#confirm-run")
+            await pilot.pause()
+            assert calls == [(entry, {"tag": "demo"})]
 
     _run(scenario())
 

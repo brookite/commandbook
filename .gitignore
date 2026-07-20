@@ -7,3 +7,5 @@ __pycache__/
 
 # uv / venv
 .venv/
+
+examples/commandbook.local.toml

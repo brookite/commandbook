@@ -16,6 +16,10 @@ QUOTE_STYLES = ("auto", "single", "double", "backtick")
 """Allowed values for `placeholder.quote_style` (used when `escape` is on)."""
 
 
+SEVERITIES = ("none", "medium", "high")
+"""Allowed command risk levels."""
+
+
 @dataclass(slots=True)
 class Placeholder:
     """A single command placeholder."""
@@ -44,6 +48,7 @@ class Command:
     template: str | None = None
     description: str = ""
     tags: list[str] = field(default_factory=list)
+    severity: str = "none"
     shells: dict[str, str] = field(default_factory=dict)
     placeholders: list[Placeholder] = field(default_factory=list)
     cwd: str | None = None

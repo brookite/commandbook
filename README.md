@@ -81,6 +81,7 @@ See [examples/commandbook.toml](examples/commandbook.toml) for a fuller example.
 | `name` | yes | Human-readable name, shown in the list and searched. |
 | `description` | no | Longer description; also searched. |
 | `tags` | no | Array of tags, e.g. `["build", "image"]`; also searched and shown in the list. |
+| `severity` | no | Risk level: `none` (default), `medium`, or `high`. High-risk commands require an extra confirmation before execution. |
 | `template` | yes* | The command template (see [Template syntax](#template-syntax)). |
 | `shells` | no | Per-shell templates, e.g. `shells.bash`, `shells.powershell`, `shells.cmd`, `shells.default`. |
 | `cwd` | no | Working directory for this command. |
@@ -322,7 +323,9 @@ your `~/commandbook.toml`.
      **groups** view, open a group with <kbd>Enter</kbd>, and search within it.
      <kbd>Esc</kbd> goes back to the groups; <kbd>Ctrl</kbd>+<kbd>G</kbd> returns to
      all commands.
-   - Fill the fields. Required fields are marked with `*`; each value is validated
+   - The form shows the command name, tags, and description. Fill the fields with
+     <kbd>Tab</kbd> or <kbd>↑</kbd>/<kbd>↓</kbd>. Required fields are marked with `*`;
+     each value is validated
      against its type as you submit — a missing file or a non-integer is rejected
      with a message.
    - Press **Run**. Commandbook drops to the real terminal, runs the assembled
@@ -348,6 +351,7 @@ scoped to whatever the current view shows.
 | <kbd>Enter</kbd> | Open the selected group / command (or, from the search box, the top match). |
 | <kbd>Esc</kbd> | From search, move to the list; from a group's commands, go back to the groups. |
 | <kbd>Enter</kbd> (in a form field) | Submit the placeholder form. |
+| <kbd>↑</kbd> / <kbd>↓</kbd> (in a form) | Move between fields and action buttons. |
 | <kbd>Esc</kbd> (in a form) | Cancel and close the form. |
 | <kbd>Ctrl</kbd>+<kbd>Q</kbd> | Quit. |
 

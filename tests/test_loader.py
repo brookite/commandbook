@@ -46,6 +46,24 @@ def test_tags_must_be_an_array():
         parse_config(data)
 
 
+def test_command_severity_defaults_to_none_and_accepts_known_levels():
+    default = parse_config(_single_command({"id": "default", "name": "Default", "template": "x"}))
+    high = parse_config(
+        _single_command({"id": "danger", "name": "Danger", "template": "x", "severity": "high"})
+    )
+
+    assert default.groups[0].commands[0].severity == "none"
+    assert high.groups[0].commands[0].severity == "high"
+
+
+def test_unknown_command_severity_raises():
+    data = _single_command(
+        {"id": "danger", "name": "Danger", "template": "x", "severity": "critical"}
+    )
+    with pytest.raises(ConfigError, match="severity"):
+        parse_config(data)
+
+
 def test_template_for_falls_back():
     data = {
         "groups": [

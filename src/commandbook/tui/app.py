@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import cast
 
 from rich.markup import escape
 from textual import events
@@ -18,6 +19,7 @@ from commandbook.config.loader import ConfigError, load_config
 from commandbook.config.models import Group
 from commandbook.shell.detect import ShellNotFoundError, detect_shell
 from commandbook.shell.runner import resolve_cwd, run_command
+from commandbook.tui.screens.high_severity_confirm import HighSeverityConfirmScreen
 from commandbook.tui.screens.placeholder_form import PlaceholderFormScreen
 from commandbook.variables.store import VariableStore
 
@@ -45,7 +47,7 @@ class _NavOptionList(OptionList):
 
     def action_cursor_up(self) -> None:
         if self.highlighted in (0, None):
-            self.app.action_focus_search()
+            cast("CommandbookApp", self.app).action_focus_search()
         else:
             super().action_cursor_up()
 
@@ -86,18 +88,29 @@ class CommandbookApp(App[None]):
     PlaceholderFormScreen { align: center middle; }
     #form { width: 70%; max-width: 90; height: auto; max-height: 80%;
             border: thick $primary; background: $surface; padding: 1 2; }
-    #form-title { padding-bottom: 1; }
+    #form-title { text-style: bold; }
+    #form-tags { height: auto; padding-top: 1; }
+    #form-description { height: auto; color: $text-muted; padding: 0 0 1 0; }
     #form-buttons { height: auto; padding-top: 1; }
     #form-buttons Button { margin-right: 2; }
     .hint { color: $text-muted; }
     .warn { color: $warning; }
+    HighSeverityConfirmScreen { align: center middle; }
+    #high-severity-confirm { width: 64; height: auto; border: thick $error;
+                             background: $surface; padding: 1 2; }
+    #confirm-level { color: $error; text-style: bold; }
+    #confirm-title { height: auto; text-style: bold; padding-top: 1; }
+    #confirm-description { height: auto; color: $text-muted; }
+    #confirm-warning { height: auto; padding: 1 0; }
+    #confirm-buttons { height: auto; }
+    #confirm-buttons Button { margin-right: 2; }
     """
     BINDINGS = [
         Binding("ctrl+q", "quit", "Quit"),
         Binding("ctrl+f", "focus_search", "Search"),
         Binding("slash", "focus_search", "Search", show=False),
         Binding("ctrl+g", "toggle_groups", "Groups"),
-        Binding("escape", "back", "Back"),
+        Binding("escape", "navigate_back", "Back"),
     ]
 
     def __init__(self, config_path: Path | None = None) -> None:
@@ -244,7 +257,7 @@ class CommandbookApp(App[None]):
         else:
             self._enter_all()
 
-    def action_back(self) -> None:
+    def action_navigate_back(self) -> None:
         """Esc: from search go to the list; from a group's commands go back up."""
         search = self.query_one("#search", Input)
         option_list = self.query_one("#commands", OptionList)
@@ -258,10 +271,19 @@ class CommandbookApp(App[None]):
         if entry.command.placeholders:
             self.push_screen(
                 PlaceholderFormScreen(entry, presets=self._presets_for(entry)),
-                lambda values: self._run(entry, values) if values is not None else None,
+                lambda values: self._confirm_or_run(entry, values) if values is not None else None,
             )
         else:
-            self._run(entry, {})
+            self._confirm_or_run(entry, {})
+
+    def _confirm_or_run(self, entry: CommandEntry, values: dict[str, str | bool]) -> None:
+        if entry.command.severity == "high":
+            self.push_screen(
+                HighSeverityConfirmScreen(entry),
+                lambda confirmed: self._run(entry, values) if confirmed else None,
+            )
+            return
+        self._run(entry, values)
 
     def _presets_for(self, entry: CommandEntry) -> dict[str, list[str]]:
         """Preset values for placeholders that name a variable in the active group."""
