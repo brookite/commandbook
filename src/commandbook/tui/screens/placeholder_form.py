@@ -35,10 +35,12 @@ class PlaceholderFormScreen(ModalScreen[Values | None]):
         self,
         entry: CommandEntry,
         presets: Mapping[str, list[str]] | None = None,
+        remote_paths: bool = False,
     ) -> None:
         super().__init__()
         self.entry = entry
         self.presets: Mapping[str, list[str]] = presets or {}
+        self.remote_paths = remote_paths
         self._inputs: dict[str, Field] = {}
 
     def compose(self) -> ComposeResult:
@@ -148,8 +150,13 @@ class PlaceholderFormScreen(ModalScreen[Values | None]):
                 self._show_error(f"{placeholder.label or placeholder.name}: required")
                 return
             try:
+                validation_type = (
+                    "string"
+                    if self.remote_paths and placeholder.type in ("file", "directory")
+                    else placeholder.type
+                )
                 values[placeholder.name] = validate_value(
-                    placeholder.type, raw, pattern=placeholder.pattern, search_dirs=search_dirs
+                    validation_type, raw, pattern=placeholder.pattern, search_dirs=search_dirs
                 )
             except ValidationError as exc:
                 self._show_error(f"{placeholder.label or placeholder.name}: {exc}")

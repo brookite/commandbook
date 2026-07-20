@@ -8,7 +8,9 @@ import pytest
 
 from commandbook.config.loader import ConfigError, load_config, parse_config
 
-EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "commandbook.toml"
+EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
+EXAMPLE = EXAMPLES / "commandbook.yaml"
+TOML_EXAMPLE = EXAMPLES / "commandbook.toml"
 
 
 def test_load_example_config():
@@ -30,6 +32,40 @@ def test_load_example_config():
 
     filters = commands["aws-ec2-list"].placeholder("filters")
     assert filters is not None and filters.type == "bare" and filters.escape is False
+    assert config.connectors["production"].command == "ssh production"
+    assert config.connectors["production"].persistent is True
+
+
+def test_yaml_and_toml_examples_define_the_same_commands():
+    yaml_config = load_config(EXAMPLE)
+    toml_config = load_config(TOML_EXAMPLE)
+
+    assert [command.id for _, command in yaml_config.iter_commands()] == [
+        command.id for _, command in toml_config.iter_commands()
+    ]
+
+
+def test_yaml_uses_safe_loader(tmp_path):
+    config = tmp_path / "unsafe.yaml"
+    config.write_text("value: !!python/object/apply:os.system ['echo unsafe']", encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="parse"):
+        load_config(config)
+
+
+def test_unknown_config_extension_raises(tmp_path):
+    config = tmp_path / "commandbook.json"
+    config.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="Unsupported config format"):
+        load_config(config)
+
+
+def test_connector_validation():
+    with pytest.raises(ConfigError, match="command"):
+        parse_config({"connectors": {"broken": {"persistent": True}}})
+    with pytest.raises(ConfigError, match="true or false"):
+        parse_config({"connectors": {"broken": {"command": "ssh host", "persistent": "yes"}}})
 
 
 def test_tags_must_be_an_array():
@@ -78,6 +114,26 @@ def test_template_for_falls_back():
     cmd = parse_config(data).groups[0].commands[0]
     assert cmd.template_for("bash") == "echo b"
     assert cmd.template_for("powershell") == "echo d"
+
+
+def test_template_for_uses_connector_dialect():
+    data = {
+        "groups": [
+            {
+                "name": "G",
+                "commands": [
+                    {
+                        "id": "c1",
+                        "name": "C1",
+                        "template": "echo base",
+                        "shells": {"posix": "echo posix"},
+                    }
+                ],
+            }
+        ]
+    }
+    command = parse_config(data).groups[0].commands[0]
+    assert command.template_for("zsh", "posix") == "echo posix"
 
 
 def test_missing_group_name():

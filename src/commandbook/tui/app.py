@@ -16,14 +16,22 @@ from textual.widgets.option_list import Option
 from commandbook.commands.builder import RenderSpec, build_command
 from commandbook.commands.registry import CommandEntry, CommandRegistry
 from commandbook.config.loader import ConfigError, load_config
-from commandbook.config.models import Group
+from commandbook.config.models import Connector, Group
+from commandbook.connectors import (
+    ConnectionManager,
+    ConnectorError,
+    ResolvedConnector,
+    resolve_connector,
+)
+from commandbook.connectors.parser import parse_connector_command
 from commandbook.shell.detect import ShellNotFoundError, detect_shell
 from commandbook.shell.runner import resolve_cwd, run_command
+from commandbook.tui.screens.connector_picker import ConnectorPickerScreen, ConnectorRequest
 from commandbook.tui.screens.high_severity_confirm import HighSeverityConfirmScreen
 from commandbook.tui.screens.placeholder_form import PlaceholderFormScreen
 from commandbook.variables.store import VariableStore
 
-_DEFAULT_CONFIG_NAME = "commandbook.toml"
+_DEFAULT_CONFIG_NAMES = ("commandbook.yaml", "commandbook.yml", "commandbook.toml")
 
 
 def default_config_paths() -> list[Path]:
@@ -31,7 +39,11 @@ def default_config_paths() -> list[Path]:
 
     A project-local file takes precedence over the one in the home directory.
     """
-    return [Path.cwd() / _DEFAULT_CONFIG_NAME, Path.home() / _DEFAULT_CONFIG_NAME]
+    return [
+        directory / name
+        for directory in (Path.cwd(), Path.home())
+        for name in _DEFAULT_CONFIG_NAMES
+    ]
 
 
 def default_config_path() -> Path | None:
@@ -85,6 +97,8 @@ class CommandbookApp(App[None]):
     #search { dock: top; margin: 0 1; }
     #commands { height: 1fr; margin: 0 1; }
     #status { dock: bottom; color: $error; padding: 0 1; }
+    #connection-status { dock: bottom; height: 1; padding: 0 1;
+                         background: $boost; color: $text-muted; }
     PlaceholderFormScreen { align: center middle; }
     #form { width: 70%; max-width: 90; height: auto; max-height: 80%;
             border: thick $primary; background: $surface; padding: 1 2; }
@@ -104,21 +118,43 @@ class CommandbookApp(App[None]):
     #confirm-warning { height: auto; padding: 1 0; }
     #confirm-buttons { height: auto; }
     #confirm-buttons Button { margin-right: 2; }
+    ConnectorPickerScreen { align: center middle; }
+    #connector-picker { width: 72; height: auto; border: thick $accent;
+                        background: $surface; padding: 1 2; }
+    #connector-title { text-style: bold; }
+    #connector-description { height: auto; color: $text-muted; padding-bottom: 1; }
+    #connector-command { margin-top: 1; }
+    #connector-error { height: auto; }
+    #connector-buttons { height: auto; padding-top: 1; }
+    #connector-buttons Button { margin-right: 2; }
     """
     BINDINGS = [
         Binding("ctrl+q", "quit", "Quit"),
         Binding("ctrl+f", "focus_search", "Search"),
         Binding("slash", "focus_search", "Search", show=False),
         Binding("ctrl+g", "toggle_groups", "Groups"),
+        Binding("ctrl+s", "select_connector", "Connect"),
+        Binding("ctrl+d", "disconnect", "Disconnect", show=False),
         Binding("escape", "navigate_back", "Back"),
     ]
 
-    def __init__(self, config_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        config_path: Path | None = None,
+        *,
+        initial_connector: str | None = None,
+        initial_persistent: bool = False,
+    ) -> None:
         super().__init__()
         self.config_path = config_path
+        self.initial_connector = initial_connector
+        self.initial_persistent = initial_persistent
         self.registry: CommandRegistry | None = None
         self.store: VariableStore | None = None
         self._shell_pref = "auto"
+        self.connectors: dict[str, Connector] = {}
+        self.connection = ConnectionManager()
+        self._connector_blocked = False
         self._level = "all"  # "all" | "groups" | "commands"
         self._current_group: Group | None = None
         self._visible_groups: list[Group] = []
@@ -130,14 +166,15 @@ class CommandbookApp(App[None]):
         yield Input(placeholder="Search commands…", id="search")
         yield _NavOptionList(id="commands")
         yield Static("", id="status")
+        yield Static("Local shell", id="connection-status")
         yield Footer()
 
     def on_mount(self) -> None:
         path = self.config_path or default_config_path()
         if path is None:
             self._fail(
-                f"No config found. Pass --config, or add {_DEFAULT_CONFIG_NAME} to the "
-                f"current directory or your home directory (~/{_DEFAULT_CONFIG_NAME})."
+                "No config found. Pass --config, or add commandbook.yaml, commandbook.yml, "
+                "or commandbook.toml to the current directory or your home directory."
             )
             return
         try:
@@ -148,7 +185,19 @@ class CommandbookApp(App[None]):
         self.registry = CommandRegistry(config)
         self.store = VariableStore(config.variable_groups)
         self._shell_pref = config.settings.shell
+        self.connectors = config.connectors
         self._enter_all()
+        if self.initial_connector is not None:
+            try:
+                connector = resolve_connector(
+                    self.initial_connector,
+                    self.connectors,
+                    persistent_override=self.initial_persistent,
+                )
+                self._activate_connector(connector)
+            except ConnectorError as exc:
+                self._connector_blocked = True
+                self._fail(str(exc))
 
     # --- Navigation: all-commands (main) <-> groups -> a group's commands ----
 
@@ -270,7 +319,11 @@ class CommandbookApp(App[None]):
     def _launch(self, entry: CommandEntry) -> None:
         if entry.command.placeholders:
             self.push_screen(
-                PlaceholderFormScreen(entry, presets=self._presets_for(entry)),
+                PlaceholderFormScreen(
+                    entry,
+                    presets=self._presets_for(entry),
+                    remote_paths=self.connection.connector is not None,
+                ),
                 lambda values: self._confirm_or_run(entry, values) if values is not None else None,
             )
         else:
@@ -297,6 +350,16 @@ class CommandbookApp(App[None]):
         return presets
 
     def _run(self, entry: CommandEntry, values: dict[str, str | bool]) -> None:
+        if self._connector_blocked:
+            self.notify(
+                "Connector is unavailable. Use Ctrl+S to choose a connector or Local shell.",
+                severity="error",
+            )
+            return
+        if self.connection.connector is not None:
+            self._run_connected(entry, values)
+            return
+
         try:
             shell = detect_shell(self._shell_pref)
         except ShellNotFoundError as exc:
@@ -322,6 +385,108 @@ class CommandbookApp(App[None]):
             code = run_command(shell, command, cwd=cwd)
             input("\n[Commandbook] Press Enter to return…")
         self.notify(f"Exited with code {code}")
+
+    def _run_connected(self, entry: CommandEntry, values: dict[str, str | bool]) -> None:
+        try:
+            with self.suspend():
+                shell = self.connection.prepare()
+                cwd = resolve_cwd(entry.command, entry.group, values)
+                template = entry.command.template_for(shell.name, shell.dialect)
+                specs = {
+                    placeholder.name: RenderSpec(
+                        escape=placeholder.escape,
+                        quote_style=placeholder.quote_style,
+                        strip_quotes=placeholder.strip_quotes,
+                    )
+                    for placeholder in entry.command.placeholders
+                }
+                command = build_command(
+                    template,
+                    values,
+                    quote_as=shell.quote_as,
+                    cwd=cwd or ".",
+                    specs=specs,
+                )
+                print(f"$ {command}\n")
+                code = self.connection.run(command, cwd=cwd)
+                input("\n[Commandbook] Press Enter to return…")
+        except ConnectorError as exc:
+            self._connector_blocked = True
+            self.notify(str(exc), severity="error", timeout=10)
+            self.query_one("#status", Static).update(str(exc))
+            self._update_connection_status()
+            return
+        self._connector_blocked = False
+        self._update_connection_status()
+        self.notify(f"Exited with code {code}")
+
+    def action_select_connector(self) -> None:
+        self.push_screen(ConnectorPickerScreen(self.connectors), self._apply_connector_request)
+
+    def _apply_connector_request(self, request: ConnectorRequest | None) -> None:
+        if request is None:
+            return
+        if request.value is None:
+            self.action_disconnect()
+            return
+        try:
+            if request.resolve_alias:
+                connector = resolve_connector(
+                    request.value,
+                    self.connectors,
+                    persistent_override=request.persistent,
+                )
+            else:
+                connector = parse_connector_command(
+                    request.value,
+                    persistent=request.persistent,
+                )
+            self._activate_connector(connector)
+        except ConnectorError as exc:
+            self._connector_blocked = True
+            self._fail(str(exc))
+
+    def _activate_connector(self, connector: ResolvedConnector) -> None:
+        self.connection.select(connector)
+        self._connector_blocked = False
+        if connector.persistent:
+            try:
+                with self.suspend():
+                    print(f"[Commandbook] Connecting to {connector.display_name}…")
+                    self.connection.prepare()
+            except ConnectorError as exc:
+                self._connector_blocked = True
+                self._fail(str(exc))
+        self._update_connection_status()
+
+    def action_disconnect(self) -> None:
+        self.connection.disconnect()
+        self._connector_blocked = False
+        self.query_one("#status", Static).update("")
+        self._update_connection_status()
+        self.notify("Disconnected; commands will run in the local shell")
+
+    def _update_connection_status(self) -> None:
+        connector = self.connection.connector
+        status = self.query_one("#connection-status", Static)
+        if connector is None:
+            status.update("Local shell")
+            return
+        if connector.persistent and self.connection.connected:
+            shell = self.connection.shell
+            shell_name = shell.name if shell is not None else "detecting"
+            status.update(
+                f"Connected · {escape(connector.display_name)} · {shell_name}"
+                "  [dim]Ctrl+D Disconnect[/dim]"
+            )
+            return
+        if self._connector_blocked:
+            status.update(f"[red]Disconnected · {escape(connector.display_name)}[/red]")
+            return
+        status.update(f"Next command via {escape(connector.display_name)}")
+
+    def on_unmount(self) -> None:
+        self.connection.disconnect()
 
     def _fail(self, message: str) -> None:
         self.query_one("#status", Static).update(message)

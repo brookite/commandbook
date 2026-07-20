@@ -9,7 +9,19 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 VALID_SHELLS = ("auto", "bash", "cmd", "powershell")
-"""Allowed values for `settings.shell` and keys of `command.shells`."""
+"""Allowed values for `settings.shell`."""
+
+VALID_TEMPLATE_SHELLS = (
+    "bash",
+    "sh",
+    "dash",
+    "zsh",
+    "ksh",
+    "cmd",
+    "powershell",
+    "posix",
+)
+"""Allowed concrete shell names and connector dialects in `command.shells`."""
 
 
 QUOTE_STYLES = ("auto", "single", "double", "backtick")
@@ -54,13 +66,15 @@ class Command:
     cwd: str | None = None
     cwd_from: str | None = None
 
-    def template_for(self, shell: str) -> str:
+    def template_for(self, shell: str, dialect: str | None = None) -> str:
         """Return the template for a specific shell.
 
-        Priority: `shells[shell]` -> `shells['default']` -> `template`.
+        Priority: exact shell -> connector dialect -> `default` -> `template`.
         """
         if shell in self.shells:
             return self.shells[shell]
+        if dialect is not None and dialect in self.shells:
+            return self.shells[dialect]
         if "default" in self.shells:
             return self.shells["default"]
         if self.template is not None:
@@ -80,6 +94,16 @@ class VarGroup:
 
     name: str
     values: dict[str, list[str]] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class Connector:
+    """A named command transport configured by the user."""
+
+    alias: str
+    command: str
+    persistent: bool = False
+    cwd: str | None = None
 
 
 @dataclass(slots=True)
@@ -109,6 +133,7 @@ class Config:
     settings: Settings = field(default_factory=Settings)
     groups: list[Group] = field(default_factory=list)
     variable_groups: dict[str, VarGroup] = field(default_factory=dict)
+    connectors: dict[str, Connector] = field(default_factory=dict)
 
     def iter_commands(self):
         """Iterate over all commands as (group, command)."""

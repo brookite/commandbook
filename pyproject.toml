@@ -1,10 +1,12 @@
 [project]
 name = "commandbook"
-version = "0.1.1"
+version = "0.2.0"
 description = "Консольный реестр CLI/shell-команд с плейсхолдерами и fuzzy-поиском"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "pexpect>=4.9; platform_system != 'Windows'",
+    "pyyaml>=6.0",
     "textual>=0.80",
 ]
 

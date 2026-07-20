@@ -9,10 +9,11 @@ from textual.widgets import Button, Input, OptionList, Static
 
 from commandbook.tui import app as app_module
 from commandbook.tui.app import CommandbookApp, default_config_path
+from commandbook.tui.screens.connector_picker import ConnectorPickerScreen, ConnectorRequest
 from commandbook.tui.screens.high_severity_confirm import HighSeverityConfirmScreen
 from commandbook.tui.screens.placeholder_form import PlaceholderFormScreen
 
-EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "commandbook.toml"
+EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "commandbook.yaml"
 
 
 def _run(coro) -> None:
@@ -34,6 +35,9 @@ def test_default_config_prefers_cwd_then_home(tmp_path, monkeypatch):
 
     (cwd / "commandbook.toml").write_text("", encoding="utf-8")
     assert default_config_path() == cwd / "commandbook.toml"
+
+    (cwd / "commandbook.yaml").write_text("", encoding="utf-8")
+    assert default_config_path() == cwd / "commandbook.yaml"
 
 
 def test_app_main_view_lists_all_commands():
@@ -117,6 +121,59 @@ def test_app_computes_presets_for_variable_placeholder():
         async with app.run_test():
             entry = next(e for e in app.registry.all() if e.command.id == "aws-ec2-list")
             assert app._presets_for(entry) == {"region": ["us-east-1", "eu-west-1"]}
+
+    _run(scenario())
+
+
+def test_ctrl_s_opens_connector_picker_and_ephemeral_alias_is_next_command_only():
+    async def scenario() -> None:
+        app = CommandbookApp(config_path=EXAMPLE)
+        async with app.run_test() as pilot:
+            app.action_select_connector()
+            await pilot.pause()
+            assert isinstance(app.screen, ConnectorPickerScreen)
+            app.screen.dismiss(None)
+            await pilot.pause()
+
+            app._apply_connector_request(ConnectorRequest("postgres-container"))
+            await pilot.pause()
+            connector = app.connection.connector
+            assert connector is not None
+            assert connector.alias == "postgres-container"
+            assert connector.persistent is False
+            assert "Next command via postgres-container" in str(
+                app.query_one("#connection-status", Static).content
+            )
+
+            app.action_disconnect()
+            assert app.connection.connector is None
+            assert str(app.query_one("#connection-status", Static).content) == "Local shell"
+
+    _run(scenario())
+
+
+def test_remote_form_does_not_validate_paths_on_local_filesystem():
+    async def scenario() -> None:
+        app = CommandbookApp(config_path=EXAMPLE)
+        captured: list[dict[str, str | bool]] = []
+        async with app.run_test() as pilot:
+            entry = next(e for e in app.registry.all() if e.command.id == "docker-build")
+            screen = PlaceholderFormScreen(entry, remote_paths=True)
+            app.push_screen(screen, lambda values: captured.append(values or {}))
+            await pilot.pause()
+            screen._inputs["tag"].value = "demo"
+            screen._inputs["dockerfile"].value = "/remote/Dockerfile"
+            screen._inputs["context"].value = "/remote/context"
+            screen._submit()
+            await pilot.pause()
+
+        assert captured == [
+            {
+                "tag": "demo",
+                "dockerfile": "/remote/Dockerfile",
+                "context": "/remote/context",
+            }
+        ]
 
     _run(scenario())
 

@@ -1,366 +1,276 @@
 # Commandbook
 
-A console registry of CLI/shell commands with placeholders and fuzzy search.
+A console registry of CLI/shell commands with placeholders, fuzzy search, and
+connectors for local shells, SSH hosts, and Docker containers.
 
-Store prepared commands in TOML, find them with a fuzzy query, fill in the
-placeholders through a form — and Commandbook assembles and runs the command in the
-right shell and working directory. The goal is to speed up command entry without
-memorizing detailed arguments.
+Commandbook reads a hand-written YAML or TOML file, asks for placeholder values,
+assembles a safely quoted command, and runs it in the local or selected connected
+shell. YAML is the preferred configuration format.
 
-## Install (dev)
+## Install (development)
 
 ```sh
 uv sync
 ```
 
+Connector sessions require a POSIX PTY and are supported on Linux, macOS, and WSL.
+Local execution remains available on Windows.
+
 ## Run
 
 ```sh
-# Explicit config:
-uv run python -m commandbook --config examples/commandbook.toml
+# Explicit YAML config
+uv run python -m commandbook --config examples/commandbook.yaml
 
-# Or rely on the default locations (see below):
+# Start with a configured connector alias
+uv run python -m commandbook --connect production
+
+# Start a persistent connector from a full command
+uv run python -m commandbook --connect "ssh deploy@example.com" --persistent
+
+# Use the default config search
 uv run python -m commandbook
 ```
 
-When `--config` is omitted, Commandbook looks for `commandbook.toml` in this order:
+Without `--config`, each directory is searched in this order:
 
-1. the current directory (`./commandbook.toml`) — a project-local override;
-2. your home directory (`~/commandbook.toml`) — your personal command book.
+1. `./commandbook.yaml`, `./commandbook.yml`, `./commandbook.toml`;
+2. `~/commandbook.yaml`, `~/commandbook.yml`, `~/commandbook.toml`.
 
-The first file found wins.
-
----
+The first file found wins. TOML remains supported for backward compatibility.
 
 ## Configuration
 
-The application is configured with a single TOML file, edited by hand — Commandbook
-only reads it. A minimal file looks like this:
+A minimal YAML configuration:
 
-```toml
-[settings]
-shell = "auto"
+```yaml
+settings:
+  shell: auto
 
-[[groups]]
-name = "Docker"
-
-[[groups.commands]]
-id = "docker-build"
-name = "Build image"
-template = "docker build -t ${tag} ${context}"
-
-[[groups.commands.placeholders]]
-name = "tag"
-label = "Image tag"
-type = "string"
-
-[[groups.commands.placeholders]]
-name = "context"
-label = "Build context"
-type = "directory"
-default = "."
+groups:
+  - name: Docker
+    commands:
+      - id: docker-build
+        name: Build image
+        template: 'docker build -t ${tag} ${context}'
+        placeholders:
+          - name: tag
+            label: Image tag
+            type: string
+          - name: context
+            label: Build context
+            type: directory
+            default: .
 ```
 
-See [examples/commandbook.toml](examples/commandbook.toml) for a fuller example.
+See [examples/commandbook.yaml](examples/commandbook.yaml) for a full YAML example.
+The previous [TOML example](examples/commandbook.toml) is kept as a compatibility
+reference.
 
-### Structure
+### Top-level sections
 
-| Section | Meaning |
+| Key | Meaning |
 | --- | --- |
-| `[settings]` | Global settings. `shell` = `auto` \| `bash` \| `cmd` \| `powershell`. |
-| `[variables.groups.<name>]` | A named variable group: `var = ["value1", "value2"]`. Reusable value presets. |
-| `[[groups]]` | A command group. Fields: `name` (required), `description`, `tags`, `cwd`, `search_dirs`, `variables`. |
-| `[[groups.commands]]` | A command. Fields below. |
-| `[[groups.commands.placeholders]]` | A placeholder of that command. Fields below. |
+| `settings` | Global settings. `shell`: `auto`, `bash`, `cmd`, or `powershell`. |
+| `variables.groups` | Named reusable value presets. |
+| `connectors` | Named shell, SSH, or Docker connector aliases. |
+| `groups` | Command groups with their commands and placeholders. |
 
-**Command fields**
-
-| Field | Required | Meaning |
-| --- | --- | --- |
-| `id` | yes | Unique command id (across the whole config). |
-| `name` | yes | Human-readable name, shown in the list and searched. |
-| `description` | no | Longer description; also searched. |
-| `tags` | no | Array of tags, e.g. `["build", "image"]`; also searched and shown in the list. |
-| `severity` | no | Risk level: `none` (default), `medium`, or `high`. High-risk commands require an extra confirmation before execution. |
-| `template` | yes* | The command template (see [Template syntax](#template-syntax)). |
-| `shells` | no | Per-shell templates, e.g. `shells.bash`, `shells.powershell`, `shells.cmd`, `shells.default`. |
-| `cwd` | no | Working directory for this command. |
-| `cwd_from` | no | Name of a `file`/`directory` placeholder whose value becomes the working directory. |
-
-\* A command needs either `template` or a `shells` table containing at least
-`default`.
-
-**Placeholder fields**
+### Command fields
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `name` | yes | Referenced in the template as `${name}`. |
-| `type` | yes | One of the [types](#placeholder-types) below. |
-| `label` | no | Shown in the form (falls back to `name`). |
-| `description` | no | Hint shown under the field. |
-| `optional` | no | If `true`, the field may be left empty. Defaults to `false`. |
-| `pattern` | for `regex` | Regular expression the value must fully match. |
-| `default` | no | Pre-filled value in the form. |
-| `escape` | no | Shell-escape the value before substitution. Defaults to `true` (always `false` for `bare`). |
-| `quote_style` | no | When escaping: `auto` (minimal, default), `single`, `double`, or `backtick`. |
-| `strip_quotes` | no | Remove one layer of surrounding quotes the user typed before escaping. Defaults to `false`. |
+| `id` | yes | Unique command id across the configuration. |
+| `name` | yes | Human-readable searchable name. |
+| `description` | no | Longer searchable description. |
+| `tags` | no | Searchable tags, e.g. `[build, image]`. |
+| `severity` | no | `none` (default), `medium`, or `high`; `high` requires confirmation. |
+| `template` | yes* | Default command template. |
+| `shells` | no | Per-shell/dialect templates: `bash`, `sh`, `dash`, `zsh`, `ksh`, `powershell`, `cmd`, `posix`, `default`. |
+| `cwd` | no | Local cwd without a connector; remote cwd with a connector. |
+| `cwd_from` | no | A `file`/`directory` placeholder used as cwd. |
 
-### Placeholder types
+\* A command needs `template` or at least `shells.default`.
+
+### Placeholder fields
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `name` | yes | Referenced as `${name}` in a template. |
+| `type` | yes | One of the supported placeholder types below. |
+| `label` | no | Form label; defaults to `name`. |
+| `description` | no | Hint shown below the field. |
+| `optional` | no | Allow an empty value; defaults to `false`. |
+| `pattern` | for `regex` | Full-match regular expression. |
+| `default` | no | Pre-filled value. |
+| `escape` | no | Shell-escape before substitution; defaults to `true`. |
+| `quote_style` | no | `auto`, `single`, `double`, or `backtick`. |
+| `strip_quotes` | no | Remove one typed layer of surrounding quotes. |
 
 | Type | Accepts / validates |
 | --- | --- |
 | `string` | Any text. |
-| `bare` | Any text, inserted **without** shell escaping (raw). Use with care. Equivalent to `string` + `escape = false`. |
-| `int` | An integer. |
-| `float` | A real number. |
-| `date` | A date in `YYYY-MM-DD` format. |
+| `bare` | Trusted raw shell syntax without escaping. |
+| `int`, `float` | Numeric values. |
+| `date` | `YYYY-MM-DD`. |
 | `json` | Valid JSON. |
 | `regex` | Text fully matching `pattern`. |
-| `email` | An email address. |
-| `phone` | A phone number. |
-| `file` | A path to an existing file (resolved against the group's `search_dirs`). |
-| `directory` | A path to an existing directory. |
-| `checkbox` | A yes/no toggle. Carries no value — it only gates an optional segment. Always optional. |
+| `email`, `phone` | Email address or phone number. |
+| `file`, `directory` | Existing local paths; treated as remote paths under a connector. |
+| `checkbox` | Optional yes/no gate for an optional segment. |
 
----
+## Connectors
+
+Connectors may be selected at startup with `--connect` or from the TUI with
+<kbd>Ctrl</kbd>+<kbd>S</kbd>. The CLI value is resolved as an exact configured alias
+first, then as a full connector command.
+
+```yaml
+connectors:
+  workstation-shell:
+    command: /usr/bin/bash
+    persistent: true
+
+  production:
+    command: ssh production
+    persistent: true
+
+  backend:
+    command: docker compose exec backend
+    persistent: false
+    cwd: ~/projects/service
+
+  worker:
+    command: docker exec worker /bin/sh
+    persistent: false
+```
+
+Connector fields:
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `command` | yes | Shell path, full `ssh`, `docker exec`, or `docker compose exec` command. |
+| `persistent` | no | Keep one shell and its state between commands; defaults to `false`. |
+| `cwd` | no | Local directory used to start the connector command. |
+
+Commandbook handles Docker interactive/TTY flags itself. A Docker shell is optional;
+when omitted it probes `bash`, `zsh`, `sh`, then `pwsh`. SSH host aliases work through
+the user's normal OpenSSH configuration.
+
+Supported connected shell dialects are POSIX (`bash`, `sh`/`dash`, `zsh`, `ksh`)
+and PowerShell. Shell detection controls placeholder quoting and template selection:
+
+```yaml
+groups:
+  - name: Files
+    commands:
+      - id: list
+        name: List files
+        shells:
+          posix: ls -la
+          powershell: Get-ChildItem
+          default: ls
+```
+
+An ephemeral connector selected in the TUI is used for the next command only. A
+persistent connector preserves cwd, exported environment variables, and other shell
+state. Its status appears in the bottom bar; press <kbd>Ctrl</kbd>+<kbd>D</kbd> to
+disconnect. Connection errors never fall back to local execution automatically.
+
+`command.cwd` and group `cwd` are remote paths while connected. `connector.cwd` is
+always local and is useful for locating a Compose project.
 
 ## Template syntax
 
-A template is the shell command with placeholders. Three constructs are supported.
+### Substitution — `${name}`
 
-### 1. Substitution — `${name}`
+Values are escaped for the detected target shell:
 
-`${name}` is replaced with the placeholder's value. Values are **escaped for the
-target shell**, so spaces and special characters are safe:
-
-```toml
-template = "echo ${message}"
+```yaml
+template: 'echo ${message}'
 ```
 
-Entering `hello world` produces `echo 'hello world'` (under bash).
+Entering `hello world` produces `echo 'hello world'` in a POSIX shell.
 
-### 2. Optional segment — `[[ … ]]`
+### Optional segments — `[[ … ]]`
 
-Everything inside `[[ … ]]` is included **only if every placeholder referenced
-inside it is present** (a regular placeholder has a non-empty value; a checkbox is
-checked). Otherwise the whole segment is dropped. Put the surrounding spaces
-*inside* the brackets so the spacing stays correct either way:
+An optional segment is retained only when every placeholder inside is present:
 
-```toml
-template = "docker build -t ${tag}[[ -f ${dockerfile}]] ${context}"
+```yaml
+template: 'docker build -t ${tag}[[ -f ${dockerfile}]] ${context}'
 ```
 
-- With a `dockerfile` value: `docker build -t img -f Dockerfile .`
+- With `dockerfile`: `docker build -t img -f Dockerfile .`
 - Without it: `docker build -t img .`
 
-A checkbox gates a segment the same way — reference it inside the brackets:
+A checkbox can gate a segment:
 
-```toml
-template = "git log[[ --oneline${short}]]"
-# checkbox "short" checked   -> git log --oneline
-# checkbox "short" unchecked -> git log
+```yaml
+template: 'git log[[ --oneline${short}]]'
 ```
 
-### 3. Working directory — `$cwd` / `${cwd}`
+### Current working directory — `$cwd` / `${cwd}`
 
-The predefined variable `$cwd` (or `${cwd}`) expands to the current working
-directory:
-
-```toml
-template = "ls ${cwd}/logs"
+```yaml
+template: 'ls ${cwd}/logs'
 ```
 
-### Per-shell templates
+Working directory precedence is `cwd_from`, command `cwd`, group `cwd`, then the
+inherited local/connected shell directory.
 
-Provide different templates per shell with a `shells` table. Commandbook picks
-`shells[<detected shell>]`, then `shells.default`, then the top-level `template`:
+## Escaping and presets
 
-```toml
-[[groups.commands]]
-id = "list"
-name = "List files"
-[groups.commands.shells]
-bash = "ls -la"
-powershell = "Get-ChildItem"
-cmd = "dir"
+Use `bare` only for trusted shell fragments such as flags, globs, and pipes:
+
+```yaml
+placeholders:
+  - name: extra_args
+    label: Extra arguments (inserted raw)
+    type: bare
+    optional: true
 ```
 
-### Working directory resolution
+Named variables turn matching placeholders into dropdowns:
 
-When a command runs, its working directory is chosen in this order:
+```yaml
+variables:
+  groups:
+    aws:
+      region: [us-east-1, eu-west-1]
 
-1. the `cwd_from` placeholder's value (for a `file`, its parent directory; for a
-   `directory`, the directory itself);
-2. the command's `cwd`;
-3. the group's `cwd`;
-4. otherwise the current directory is inherited.
-
----
-
-## Escaping & quoting
-
-By default every substituted value is **shell-escaped**, so spaces and special
-characters are safe. You can tune this per placeholder:
-
-- `escape` (default `true`) — turn escaping off to insert the value verbatim.
-- `quote_style` (default `auto`) — when escaping, force `single` or `double`
-  quotes, `backtick` (prefix each special character with a backtick, PowerShell's
-  convention), or let `auto` pick minimal safe quoting. The concrete quoting
-  follows the target shell (bash, PowerShell, or cmd).
-- `strip_quotes` (default `false`) — if the user pastes a value that already has
-  surrounding quotes, remove one layer before escaping. When enabled, the form
-  shows a note so the user knows their quotes will be stripped.
-
-```toml
-[[groups.commands.placeholders]]
-name = "message"
-type = "string"
-quote_style = "double"   # -> "your message"
-strip_quotes = true      # pasting "already quoted" becomes already quoted
+groups:
+  - name: AWS
+    variables: aws
+    commands:
+      - id: aws-ec2-list
+        name: List EC2 instances
+        template: 'aws ec2 describe-instances --region ${region}'
+        placeholders:
+          - name: region
+            type: string
 ```
 
-### The `bare` type (no escaping)
+Undeclared `${name}` references become required `string` placeholders automatically.
 
-Use `type = "bare"` (or `escape = false` on any text placeholder) when the value is
-a fragment of shell syntax that must be inserted **as-is** — flags, globs, pipes:
-
-```toml
-[[groups.commands.placeholders]]
-name = "extra_args"
-label = "Extra arguments (inserted raw)"
-type = "bare"
-optional = true
-```
-
-> ⚠️ A `bare` value is not escaped, so only use it for input you trust.
-
-## Variable presets
-
-If a placeholder's `name` matches a variable in the group's variable group, the
-form offers those values as a **dropdown** instead of a free-text field:
-
-```toml
-[variables.groups.aws]
-region = ["us-east-1", "eu-west-1"]
-
-[[groups]]
-name = "AWS"
-variables = "aws"          # activate this variable group for the commands
-
-[[groups.commands]]
-id = "aws-ec2-list"
-name = "List EC2 instances"
-template = "aws ec2 describe-instances --region ${region}"
-
-[[groups.commands.placeholders]]
-name = "region"            # matches variables.groups.aws.region -> dropdown
-type = "string"
-```
-
-## Undeclared placeholders
-
-A `${name}` used in a template but **not** declared in `placeholders` is not an
-error — it is treated as a required `string` placeholder and prompted for in the
-form. Declare it only when you need a specific type, label, or options.
-
----
-
-## Tutorial: adding a command
-
-Suppose you often run a Docker build and never remember the exact flags. Add it to
-your `~/commandbook.toml`.
-
-1. **Create a group** to hold related commands:
-
-   ```toml
-   [[groups]]
-   name = "Docker"
-   search_dirs = ["~/projects"]   # where file/directory placeholders are looked up
-   ```
-
-2. **Add the command** with a template. Mark the parts that vary as `${...}`
-   placeholders, and wrap anything optional in `[[ … ]]`:
-
-   ```toml
-   [[groups.commands]]
-   id = "docker-build"
-   name = "Build image"
-   template = "docker build -t ${tag}[[ -f ${dockerfile}]] ${context}"
-   ```
-
-3. **Describe each placeholder** — its type, a friendly label, whether it is
-   optional, and an optional default:
-
-   ```toml
-   [[groups.commands.placeholders]]
-   name = "tag"
-   label = "Image tag"
-   type = "string"
-
-   [[groups.commands.placeholders]]
-   name = "dockerfile"
-   label = "Dockerfile"
-   type = "file"
-   optional = true       # if left empty, the "-f ..." segment is dropped
-
-   [[groups.commands.placeholders]]
-   name = "context"
-   label = "Build context"
-   type = "directory"
-   default = "."
-   ```
-
-4. **Run Commandbook** and use it:
-
-   ```sh
-   uv run python -m commandbook
-   ```
-
-   - The main view lists **all commands**. Type to fuzzy-find **Build image**
-     (matches the command name, id, description, tags, and its group) or arrow to
-     it, then press <kbd>Enter</kbd> to open the form.
-   - Prefer to browse by group? Press <kbd>Ctrl</kbd>+<kbd>G</kbd> to switch to the
-     **groups** view, open a group with <kbd>Enter</kbd>, and search within it.
-     <kbd>Esc</kbd> goes back to the groups; <kbd>Ctrl</kbd>+<kbd>G</kbd> returns to
-     all commands.
-   - The form shows the command name, tags, and description. Fill the fields with
-     <kbd>Tab</kbd> or <kbd>↑</kbd>/<kbd>↓</kbd>. Required fields are marked with `*`;
-     each value is validated
-     against its type as you submit — a missing file or a non-integer is rejected
-     with a message.
-   - Press **Run**. Commandbook drops to the real terminal, runs the assembled
-     command interactively, waits for you to press <kbd>Enter</kbd>, and returns to
-     the list showing the exit code.
-
-That's it — no more memorizing `docker build` flags.
-
----
-
-## Navigation & keyboard shortcuts
-
-The main view is a flat list of **all commands**. Press <kbd>Ctrl</kbd>+<kbd>G</kbd>
-to switch to the **groups** view; opening a group shows its **commands**. Search is
-scoped to whatever the current view shows.
+## Navigation
 
 | Key | Action |
 | --- | --- |
-| type in the search box | Fuzzy-filter the current view (all commands, groups, or a group's commands). |
-| <kbd>Ctrl</kbd>+<kbd>G</kbd> | Toggle between the all-commands view and the groups view. |
-| <kbd>Ctrl</kbd>+<kbd>F</kbd> or <kbd>/</kbd> | Focus the search box. |
-| <kbd>↑</kbd> / <kbd>↓</kbd> | Move through the results. |
-| <kbd>Enter</kbd> | Open the selected group / command (or, from the search box, the top match). |
-| <kbd>Esc</kbd> | From search, move to the list; from a group's commands, go back to the groups. |
-| <kbd>Enter</kbd> (in a form field) | Submit the placeholder form. |
-| <kbd>↑</kbd> / <kbd>↓</kbd> (in a form) | Move between fields and action buttons. |
-| <kbd>Esc</kbd> (in a form) | Cancel and close the form. |
+| type in search | Fuzzy-filter the current commands/groups. |
+| <kbd>Ctrl</kbd>+<kbd>G</kbd> | Toggle all-commands and groups views. |
+| <kbd>Ctrl</kbd>+<kbd>F</kbd> or <kbd>/</kbd> | Focus search. |
+| <kbd>Ctrl</kbd>+<kbd>S</kbd> | Select Local, an alias, or a custom connector. |
+| <kbd>Ctrl</kbd>+<kbd>D</kbd> | Disconnect a persistent connector. |
+| <kbd>↑</kbd> / <kbd>↓</kbd> | Move through results or form fields. |
+| <kbd>Enter</kbd> | Open/submit the selected item or form. |
+| <kbd>Esc</kbd> | Cancel a form or navigate back. |
 | <kbd>Ctrl</kbd>+<kbd>Q</kbd> | Quit. |
-
----
 
 ## Development
 
 ```sh
 uv run ruff check .
 uv run ruff format --check .
+uv run pyright src
 uv run pytest
 ```

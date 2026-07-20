@@ -6,13 +6,17 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from commandbook.commands.builder import referenced_names
 from commandbook.config.models import (
     QUOTE_STYLES,
     SEVERITIES,
     VALID_SHELLS,
+    VALID_TEMPLATE_SHELLS,
     Command,
     Config,
+    Connector,
     Group,
     Placeholder,
     Settings,
@@ -20,7 +24,8 @@ from commandbook.config.models import (
 )
 from commandbook.placeholders.types import is_known_type
 
-_SHELL_KEYS = frozenset(VALID_SHELLS) - {"auto"} | {"default"}
+_SHELL_KEYS = frozenset(VALID_TEMPLATE_SHELLS) | {"default"}
+_YAML_SUFFIXES = frozenset({".yaml", ".yml"})
 
 
 class ConfigError(ValueError):
@@ -28,26 +33,44 @@ class ConfigError(ValueError):
 
 
 def load_config(path: str | Path) -> Config:
-    """Load and validate a config from a TOML file."""
+    """Load and validate a YAML or TOML config file based on its suffix."""
     path = Path(path)
     try:
         raw = path.read_bytes()
     except OSError as exc:
         raise ConfigError(f"Could not read config {path}: {exc}") from exc
+    suffix = path.suffix.lower()
     try:
-        data = tomllib.loads(raw.decode("utf-8"))
-    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as exc:
-        raise ConfigError(f"Failed to parse TOML in {path}: {exc}") from exc
+        text = raw.decode("utf-8")
+        if suffix in _YAML_SUFFIXES:
+            loaded = yaml.safe_load(text)
+            data = {} if loaded is None else loaded
+        elif suffix == ".toml":
+            data = tomllib.loads(text)
+        else:
+            raise ConfigError(
+                f"Unsupported config format {suffix or '<none>'!r}; use .yaml, .yml, or .toml"
+            )
+    except (tomllib.TOMLDecodeError, yaml.YAMLError, UnicodeDecodeError) as exc:
+        raise ConfigError(f"Failed to parse config {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ConfigError(f"Config {path} must contain a top-level mapping")
     return parse_config(data)
 
 
 def parse_config(data: dict[str, Any]) -> Config:
-    """Build a :class:`Config` from an already-parsed TOML dictionary."""
+    """Build a :class:`Config` from an already-parsed YAML/TOML mapping."""
     settings = _parse_settings(data.get("settings", {}))
     variable_groups = _parse_variable_groups(data.get("variables", {}))
+    connectors = _parse_connectors(data.get("connectors", {}))
     groups = _parse_groups(data.get("groups", []))
 
-    config = Config(settings=settings, groups=groups, variable_groups=variable_groups)
+    config = Config(
+        settings=settings,
+        groups=groups,
+        variable_groups=variable_groups,
+        connectors=connectors,
+    )
     _validate_cross_references(config)
     return config
 
@@ -82,6 +105,34 @@ def _parse_variable_groups(raw: Any) -> dict[str, VarGroup]:
                 values[var_name] = [str(var_values)]
         result[name] = VarGroup(name=name, values=values)
     return result
+
+
+def _parse_connectors(raw: Any) -> dict[str, Connector]:
+    if not raw:
+        return {}
+    if not isinstance(raw, dict):
+        raise ConfigError("The 'connectors' section must be a mapping keyed by alias")
+
+    connectors: dict[str, Connector] = {}
+    for raw_alias, body in raw.items():
+        alias = str(raw_alias).strip()
+        if not alias:
+            raise ConfigError("Connector aliases must not be empty")
+        if not isinstance(body, dict):
+            raise ConfigError(f"connector {alias!r} must be a mapping")
+        command = _opt_str(body.get("command"))
+        if command is None or not command.strip():
+            raise ConfigError(f"connector {alias!r}: the 'command' field is required")
+        persistent = body.get("persistent", False)
+        if not isinstance(persistent, bool):
+            raise ConfigError(f"connector {alias!r}: 'persistent' must be true or false")
+        connectors[alias] = Connector(
+            alias=alias,
+            command=command,
+            persistent=persistent,
+            cwd=_opt_str(body.get("cwd")),
+        )
+    return connectors
 
 
 def _parse_groups(raw: Any) -> list[Group]:

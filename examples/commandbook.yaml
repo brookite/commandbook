@@ -1,0 +1,74 @@
+# Example Commandbook configuration. YAML is the preferred format.
+
+settings:
+  shell: auto
+
+variables:
+  groups:
+    aws:
+      region: [us-east-1, eu-west-1]
+
+connectors:
+  local-bash:
+    command: /usr/bin/bash
+    persistent: true
+  production:
+    command: ssh production
+    persistent: true
+  postgres-container:
+    command: docker compose exec postgres
+    persistent: false
+
+groups:
+  - name: Docker
+    description: Container image and runtime commands
+    tags: [containers, devops]
+    variables: aws
+    commands:
+      - id: docker-build
+        name: Build image
+        description: Build a Docker image from a context directory
+        tags: [build, image]
+        template: 'docker build -t ${tag}[[ -f ${dockerfile}]] ${context}'
+        placeholders:
+          - name: tag
+            label: Image tag
+            type: string
+          - name: dockerfile
+            label: Dockerfile
+            type: file
+            optional: true
+          - name: context
+            label: Build context
+            type: directory
+            default: .
+
+  - name: AWS
+    variables: aws
+    commands:
+      - id: aws-ec2-list
+        name: List EC2 instances
+        tags: [cloud, ec2]
+        template: 'aws ec2 describe-instances --region ${region}[[ --filters ${filters}]]'
+        placeholders:
+          - name: region
+            label: Region
+            type: string
+          - name: filters
+            label: Raw filters (inserted as-is)
+            description: Passed to the shell without quoting.
+            type: bare
+            optional: true
+
+  - name: Git
+    commands:
+      - id: git-log
+        name: Commit history
+        description: Show recent commits in one-line format
+        tags: [history, vcs]
+        template: 'git log --oneline[[ -n ${limit}]]'
+        placeholders:
+          - name: limit
+            label: How many commits
+            type: int
+            optional: true
