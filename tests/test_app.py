@@ -315,9 +315,7 @@ def test_form_does_not_mark_untouched_default_as_edited():
             screen._submit()
             await pilot.pause()
 
-        assert captured == [
-            FormSubmission(values={"name": "configured"}, edited=frozenset())
-        ]
+        assert captured == [FormSubmission(values={"name": "configured"}, edited=frozenset())]
 
     _run(scenario())
 
@@ -375,9 +373,7 @@ def test_app_caches_only_fields_marked_as_edited(tmp_path, monkeypatch):
     _run(scenario())
 
 
-def test_app_does_not_read_or_update_persistent_cache_for_nocache_command(
-    tmp_path, monkeypatch
-):
+def test_app_does_not_read_or_update_persistent_cache_for_nocache_command(tmp_path, monkeypatch):
     async def scenario() -> None:
         cache_path = tmp_path / "cache"
         cache = FormValueCache(cache_path)
