@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from rich.markup import escape
@@ -23,7 +24,15 @@ Values = dict[str, str | bool]
 Field = Input | Checkbox | Select
 
 
-class PlaceholderFormScreen(ModalScreen[Values | None]):
+@dataclass(frozen=True, slots=True)
+class FormSubmission:
+    """Validated form values together with fields edited during this opening."""
+
+    values: Values
+    edited: frozenset[str]
+
+
+class PlaceholderFormScreen(ModalScreen[FormSubmission | None]):
     """Ask for every placeholder of a command; dismiss with normalized values.
 
     Dismisses with ``None`` when cancelled.
@@ -36,12 +45,22 @@ class PlaceholderFormScreen(ModalScreen[Values | None]):
         entry: CommandEntry,
         presets: Mapping[str, list[str]] | None = None,
         remote_paths: bool = False,
+        initial_values: Mapping[str, str | bool] | None = None,
     ) -> None:
         super().__init__()
         self.entry = entry
         self.presets: Mapping[str, list[str]] = presets or {}
         self.remote_paths = remote_paths
+        self.initial_values: Mapping[str, str | bool] = initial_values or {}
         self._inputs: dict[str, Field] = {}
+        self._edited: set[str] = set()
+        self._tracking_changes = False
+
+    def on_mount(self) -> None:
+        self.call_after_refresh(self._enable_change_tracking)
+
+    def _enable_change_tracking(self) -> None:
+        self._tracking_changes = True
 
     def compose(self) -> ComposeResult:
         command = self.entry.command
@@ -81,13 +100,17 @@ class PlaceholderFormScreen(ModalScreen[Values | None]):
             self._inputs[placeholder.name] = self._make_select(placeholder, options)
         else:
             self._inputs[placeholder.name] = Input(
-                value=placeholder.default or "", placeholder=placeholder.description
+                value=self._text_default(placeholder), placeholder=placeholder.description
             )
         yield self._inputs[placeholder.name]
 
     def _make_select(self, placeholder: Placeholder, options: list[str]) -> Select:
         choices = [(value, value) for value in options]
-        default = placeholder.default if placeholder.default in options else None
+        initial = self.initial_values.get(placeholder.name)
+        if isinstance(initial, str) and initial in options:
+            default = initial
+        else:
+            default = placeholder.default if placeholder.default in options else None
         return Select(
             choices,
             value=default if default is not None else Select.BLANK,
@@ -101,14 +124,22 @@ class PlaceholderFormScreen(ModalScreen[Values | None]):
         if placeholder.strip_quotes:
             yield Label("Note: surrounding quotes you type here will be removed.", classes="warn")
 
-    @staticmethod
-    def _checkbox_default(placeholder: Placeholder) -> bool:
+    def _checkbox_default(self, placeholder: Placeholder) -> bool:
+        initial = self.initial_values.get(placeholder.name)
+        if isinstance(initial, bool):
+            return initial
         if not placeholder.default:
             return False
         try:
             return bool(validate_value("checkbox", placeholder.default))
         except ValidationError:
             return False
+
+    def _text_default(self, placeholder: Placeholder) -> str:
+        initial = self.initial_values.get(placeholder.name)
+        if isinstance(initial, str):
+            return initial
+        return placeholder.default or ""
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "run":
@@ -119,6 +150,23 @@ class PlaceholderFormScreen(ModalScreen[Values | None]):
     def on_input_submitted(self, event: Input.Submitted) -> None:
         # Pressing Enter in any field submits the whole form.
         self._submit()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        self._mark_edited(event.input)
+
+    def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        self._mark_edited(event.checkbox)
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        self._mark_edited(event.select)
+
+    def _mark_edited(self, field: Field) -> None:
+        if not self._tracking_changes:
+            return
+        for name, candidate in self._inputs.items():
+            if candidate is field:
+                self._edited.add(name)
+                return
 
     def on_key(self, event: events.Key) -> None:
         if event.key == "down":
@@ -161,7 +209,7 @@ class PlaceholderFormScreen(ModalScreen[Values | None]):
             except ValidationError as exc:
                 self._show_error(f"{placeholder.label or placeholder.name}: {exc}")
                 return
-        self.dismiss(values)
+        self.dismiss(FormSubmission(values=values, edited=frozenset(self._edited)))
 
     @staticmethod
     def _raw_value(widget: Field) -> str:

@@ -5,13 +5,15 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from textual.widgets import Button, Input, OptionList, Static
+from textual.widgets import Button, Checkbox, Input, OptionList, Select, Static
 
+from commandbook.commands.registry import CommandEntry
+from commandbook.config.models import Command, Group, Placeholder
 from commandbook.tui import app as app_module
 from commandbook.tui.app import CommandbookApp, default_config_path
 from commandbook.tui.screens.connector_picker import ConnectorPickerScreen, ConnectorRequest
 from commandbook.tui.screens.high_severity_confirm import HighSeverityConfirmScreen
-from commandbook.tui.screens.placeholder_form import PlaceholderFormScreen
+from commandbook.tui.screens.placeholder_form import FormSubmission, PlaceholderFormScreen
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "commandbook.yaml"
 
@@ -159,7 +161,10 @@ def test_remote_form_does_not_validate_paths_on_local_filesystem():
         async with app.run_test() as pilot:
             entry = next(e for e in app.registry.all() if e.command.id == "docker-build")
             screen = PlaceholderFormScreen(entry, remote_paths=True)
-            app.push_screen(screen, lambda values: captured.append(values or {}))
+            app.push_screen(
+                screen,
+                lambda submission: captured.append(submission.values if submission else {}),
+            )
             await pilot.pause()
             screen._inputs["tag"].value = "demo"
             screen._inputs["dockerfile"].value = "/remote/Dockerfile"
@@ -203,6 +208,115 @@ def test_form_shows_command_metadata_and_supports_arrow_navigation():
             await pilot.press("up")
             await pilot.pause()
             assert app.focused is tag
+
+    _run(scenario())
+
+
+def test_form_initial_values_override_defaults_for_supported_fields():
+    async def scenario() -> None:
+        entry = CommandEntry(
+            group=Group(name="Test"),
+            command=Command(
+                id="initial-values",
+                name="Initial values",
+                template="echo",
+                placeholders=[
+                    Placeholder(name="name", type="string", default="configured"),
+                    Placeholder(name="enabled", type="checkbox", default="false"),
+                    Placeholder(name="region", type="string", default="us-east-1"),
+                ],
+            ),
+        )
+        app = CommandbookApp(config_path=EXAMPLE)
+        async with app.run_test() as pilot:
+            screen = PlaceholderFormScreen(
+                entry,
+                presets={"region": ["us-east-1", "eu-west-1"]},
+                initial_values={"name": "cached", "enabled": True, "region": "eu-west-1"},
+            )
+            app.push_screen(screen)
+            await pilot.pause()
+
+            assert isinstance(screen._inputs["name"], Input)
+            assert screen._inputs["name"].value == "cached"
+            assert isinstance(screen._inputs["enabled"], Checkbox)
+            assert screen._inputs["enabled"].value is True
+            assert isinstance(screen._inputs["region"], Select)
+            assert screen._inputs["region"].value == "eu-west-1"
+
+            screen.dismiss(None)
+            await pilot.pause()
+            stale_screen = PlaceholderFormScreen(
+                entry,
+                presets={"region": ["us-east-1", "eu-west-1"]},
+                initial_values={"region": "removed-region"},
+            )
+            app.push_screen(stale_screen)
+            await pilot.pause()
+
+            assert stale_screen._inputs["region"].value == "us-east-1"
+
+    _run(scenario())
+
+
+def test_form_tracks_field_edited_then_restored_to_default():
+    async def scenario() -> None:
+        entry = CommandEntry(
+            group=Group(name="Test"),
+            command=Command(
+                id="edited-default",
+                name="Edited default",
+                template="echo ${name}",
+                placeholders=[Placeholder(name="name", type="string", default="configured")],
+            ),
+        )
+        captured: list[FormSubmission] = []
+        app = CommandbookApp(config_path=EXAMPLE)
+        async with app.run_test() as pilot:
+            screen = PlaceholderFormScreen(entry)
+            app.push_screen(screen, lambda submission: captured.append(submission))
+            await pilot.pause()
+
+            field = screen._inputs["name"]
+            assert isinstance(field, Input)
+            field.value = "changed"
+            await pilot.pause()
+            field.value = "configured"
+            await pilot.pause()
+            screen._submit()
+            await pilot.pause()
+
+        assert captured == [
+            FormSubmission(values={"name": "configured"}, edited=frozenset({"name"}))
+        ]
+
+    _run(scenario())
+
+
+def test_form_does_not_mark_untouched_default_as_edited():
+    async def scenario() -> None:
+        entry = CommandEntry(
+            group=Group(name="Test"),
+            command=Command(
+                id="untouched-default",
+                name="Untouched default",
+                template="echo ${name}",
+                placeholders=[Placeholder(name="name", type="string", default="configured")],
+            ),
+        )
+        captured: list[FormSubmission] = []
+        app = CommandbookApp(config_path=EXAMPLE)
+        async with app.run_test() as pilot:
+            screen = PlaceholderFormScreen(entry)
+            app.push_screen(screen, lambda submission: captured.append(submission))
+            await pilot.pause()
+
+            screen._submit()
+            await pilot.pause()
+
+        assert captured == [
+            FormSubmission(values={"name": "configured"}, edited=frozenset())
+        ]
 
     _run(scenario())
 

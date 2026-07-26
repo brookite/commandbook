@@ -324,7 +324,11 @@ class CommandbookApp(App[None]):
                     presets=self._presets_for(entry),
                     remote_paths=self.connection.connector is not None,
                 ),
-                lambda values: self._confirm_or_run(entry, values) if values is not None else None,
+                lambda submission: (
+                    self._confirm_or_run(entry, submission.values)
+                    if submission is not None
+                    else None
+                ),
             )
         else:
             self._confirm_or_run(entry, {})
