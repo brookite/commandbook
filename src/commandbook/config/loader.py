@@ -195,6 +195,9 @@ def _parse_commands(raw: Any, *, group_name: str) -> list[Command]:
             raise ConfigError(
                 f"command {cmd_id!r}: severity {severity!r} must be one of {', '.join(SEVERITIES)}"
             )
+        nocache = item.get("nocache", False)
+        if not isinstance(nocache, bool):
+            raise ConfigError(f"command {cmd_id!r}: 'nocache' must be true or false")
         command = Command(
             id=str(cmd_id),
             name=str(cmd_name),
@@ -202,6 +205,7 @@ def _parse_commands(raw: Any, *, group_name: str) -> list[Command]:
             description=_opt_str(item.get("description")) or "",
             tags=_parse_tags(item.get("tags"), where=f"command {cmd_id!r}"),
             severity=severity,
+            nocache=nocache,
             shells=shells,
             placeholders=placeholders,
             cwd=_opt_str(item.get("cwd")),

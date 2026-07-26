@@ -100,6 +100,23 @@ def test_unknown_command_severity_raises():
         parse_config(data)
 
 
+def test_command_nocache_defaults_to_false_and_accepts_booleans():
+    default = parse_config(_single_command({"id": "default", "name": "Default", "template": "x"}))
+    disabled = parse_config(
+        _single_command({"id": "private", "name": "Private", "template": "x", "nocache": True})
+    )
+
+    assert default.groups[0].commands[0].nocache is False
+    assert disabled.groups[0].commands[0].nocache is True
+
+
+def test_command_nocache_rejects_non_boolean_values():
+    data = _single_command({"id": "bad", "name": "Bad", "template": "x", "nocache": "true"})
+
+    with pytest.raises(ConfigError, match="nocache.*true or false"):
+        parse_config(data)
+
+
 def test_template_for_falls_back():
     data = {
         "groups": [

@@ -61,6 +61,7 @@ class Command:
     description: str = ""
     tags: list[str] = field(default_factory=list)
     severity: str = "none"
+    nocache: bool = False
     shells: dict[str, str] = field(default_factory=dict)
     placeholders: list[Placeholder] = field(default_factory=list)
     cwd: str | None = None
