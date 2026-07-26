@@ -7,6 +7,7 @@ from pathlib import Path
 
 from textual.widgets import Button, Checkbox, Input, OptionList, Select, Static
 
+from commandbook.cache import FormValueCache
 from commandbook.commands.registry import CommandEntry
 from commandbook.config.models import Command, Group, Placeholder
 from commandbook.tui import app as app_module
@@ -317,6 +318,126 @@ def test_form_does_not_mark_untouched_default_as_edited():
         assert captured == [
             FormSubmission(values={"name": "configured"}, edited=frozenset())
         ]
+
+    _run(scenario())
+
+
+def test_app_prefills_form_from_cache_unless_command_disables_cache(tmp_path):
+    async def scenario() -> None:
+        cache_path = tmp_path / "cache"
+        FormValueCache(cache_path).update("docker-build", {"context": "/cached/context"})
+        app = CommandbookApp(config_path=EXAMPLE, cache_path=cache_path)
+        async with app.run_test() as pilot:
+            entry = next(e for e in app.registry.all() if e.command.id == "docker-build")
+            app._launch(entry)
+            await pilot.pause()
+
+            assert isinstance(app.screen, PlaceholderFormScreen)
+            assert app.screen._inputs["context"].value == "/cached/context"
+
+            app.screen.dismiss(None)
+            await pilot.pause()
+            entry.command.nocache = True
+            app._launch(entry)
+            await pilot.pause()
+
+            assert isinstance(app.screen, PlaceholderFormScreen)
+            assert app.screen._inputs["context"].value == "."
+
+    _run(scenario())
+
+
+def test_app_caches_only_fields_marked_as_edited(tmp_path, monkeypatch):
+    async def scenario() -> None:
+        cache_path = tmp_path / "cache"
+        app = CommandbookApp(config_path=EXAMPLE, cache_path=cache_path)
+        monkeypatch.setattr(app, "_confirm_or_run", lambda entry, values: None)
+        async with app.run_test():
+            entry = next(e for e in app.registry.all() if e.command.id == "docker-build")
+            app._handle_submission(
+                entry,
+                FormSubmission(
+                    values={"tag": "demo", "dockerfile": "", "context": "."},
+                    edited=frozenset(),
+                ),
+            )
+            assert not cache_path.exists()
+
+            app._handle_submission(
+                entry,
+                FormSubmission(
+                    values={"tag": "demo", "dockerfile": "", "context": "."},
+                    edited=frozenset({"tag"}),
+                ),
+            )
+            assert FormValueCache(cache_path).values_for("docker-build") == {"tag": "demo"}
+
+    _run(scenario())
+
+
+def test_app_does_not_read_or_update_persistent_cache_for_nocache_command(
+    tmp_path, monkeypatch
+):
+    async def scenario() -> None:
+        cache_path = tmp_path / "cache"
+        cache = FormValueCache(cache_path)
+        cache.update("docker-build", {"tag": "existing"})
+        app = CommandbookApp(config_path=EXAMPLE, cache_path=cache_path)
+        monkeypatch.setattr(app, "_confirm_or_run", lambda entry, values: None)
+        async with app.run_test():
+            entry = next(e for e in app.registry.all() if e.command.id == "docker-build")
+            entry.command.nocache = True
+            app._handle_submission(
+                entry,
+                FormSubmission(
+                    values={"tag": "replacement", "dockerfile": "", "context": "."},
+                    edited=frozenset({"tag"}),
+                ),
+            )
+
+        assert cache.values_for("docker-build") == {"tag": "existing"}
+
+    _run(scenario())
+
+
+def test_handle_exit_reopens_failed_form_with_transient_values_even_with_nocache(tmp_path):
+    async def scenario() -> None:
+        app = CommandbookApp(config_path=EXAMPLE, cache_path=tmp_path / "cache")
+        async with app.run_test() as pilot:
+            entry = next(e for e in app.registry.all() if e.command.id == "docker-build")
+            entry.command.nocache = True
+
+            app._handle_exit(
+                entry,
+                {"tag": "failed", "dockerfile": "", "context": "/retry/context"},
+                7,
+            )
+            await pilot.pause()
+
+            assert isinstance(app.screen, PlaceholderFormScreen)
+            assert app.screen._inputs["tag"].value == "failed"
+            assert app.screen._inputs["context"].value == "/retry/context"
+            assert not (tmp_path / "cache").exists()
+
+    _run(scenario())
+
+
+def test_handle_exit_does_not_open_form_after_success_or_for_command_without_placeholders():
+    async def scenario() -> None:
+        app = CommandbookApp(config_path=EXAMPLE)
+        async with app.run_test() as pilot:
+            entry = next(e for e in app.registry.all() if e.command.id == "docker-build")
+            app._handle_exit(entry, {"tag": "ok", "dockerfile": "", "context": "."}, 0)
+            await pilot.pause()
+            assert not isinstance(app.screen, PlaceholderFormScreen)
+
+            no_form_entry = CommandEntry(
+                group=Group(name="Test"),
+                command=Command(id="no-form", name="No form", template="false"),
+            )
+            app._handle_exit(no_form_entry, {}, 1)
+            await pilot.pause()
+            assert not isinstance(app.screen, PlaceholderFormScreen)
 
     _run(scenario())
 

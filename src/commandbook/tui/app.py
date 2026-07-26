@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
@@ -13,6 +14,7 @@ from textual.binding import Binding
 from textual.widgets import Footer, Header, Input, OptionList, Static
 from textual.widgets.option_list import Option
 
+from commandbook.cache import DEFAULT_CACHE_PATH, FormValueCache
 from commandbook.commands.builder import RenderSpec, build_command
 from commandbook.commands.registry import CommandEntry, CommandRegistry
 from commandbook.config.loader import ConfigError, load_config
@@ -28,7 +30,7 @@ from commandbook.shell.detect import ShellNotFoundError, detect_shell
 from commandbook.shell.runner import resolve_cwd, run_command
 from commandbook.tui.screens.connector_picker import ConnectorPickerScreen, ConnectorRequest
 from commandbook.tui.screens.high_severity_confirm import HighSeverityConfirmScreen
-from commandbook.tui.screens.placeholder_form import PlaceholderFormScreen
+from commandbook.tui.screens.placeholder_form import FormSubmission, PlaceholderFormScreen
 from commandbook.variables.store import VariableStore
 
 _DEFAULT_CONFIG_NAMES = ("commandbook.yaml", "commandbook.yml", "commandbook.toml")
@@ -144,11 +146,13 @@ class CommandbookApp(App[None]):
         *,
         initial_connector: str | None = None,
         initial_persistent: bool = False,
+        cache_path: Path | None = None,
     ) -> None:
         super().__init__()
         self.config_path = config_path
         self.initial_connector = initial_connector
         self.initial_persistent = initial_persistent
+        self.cache = FormValueCache(cache_path or DEFAULT_CACHE_PATH)
         self.registry: CommandRegistry | None = None
         self.store: VariableStore | None = None
         self._shell_pref = "auto"
@@ -316,22 +320,45 @@ class CommandbookApp(App[None]):
             self._enter_groups()
             option_list.focus()
 
-    def _launch(self, entry: CommandEntry) -> None:
+    def _launch(
+        self,
+        entry: CommandEntry,
+        initial_values: Mapping[str, str | bool] | None = None,
+    ) -> None:
         if entry.command.placeholders:
+            form_values = (
+                dict(initial_values)
+                if initial_values is not None
+                else ({} if entry.command.nocache else self.cache.values_for(entry.command.id))
+            )
             self.push_screen(
                 PlaceholderFormScreen(
                     entry,
                     presets=self._presets_for(entry),
                     remote_paths=self.connection.connector is not None,
+                    initial_values=form_values,
                 ),
-                lambda submission: (
-                    self._confirm_or_run(entry, submission.values)
-                    if submission is not None
-                    else None
-                ),
+                lambda submission: self._handle_submission(entry, submission),
             )
         else:
             self._confirm_or_run(entry, {})
+
+    def _handle_submission(
+        self,
+        entry: CommandEntry,
+        submission: FormSubmission | None,
+    ) -> None:
+        if submission is None:
+            return
+        if not entry.command.nocache and submission.edited:
+            edited_values = {
+                name: submission.values[name]
+                for name in submission.edited
+                if name in submission.values
+            }
+            if edited_values:
+                self.cache.update(entry.command.id, edited_values)
+        self._confirm_or_run(entry, submission.values)
 
     def _confirm_or_run(self, entry: CommandEntry, values: dict[str, str | bool]) -> None:
         if entry.command.severity == "high":
@@ -388,7 +415,7 @@ class CommandbookApp(App[None]):
             print(f"$ {command}\n")
             code = run_command(shell, command, cwd=cwd)
             input("\n[Commandbook] Press Enter to return…")
-        self.notify(f"Exited with code {code}")
+        self._handle_exit(entry, values, code)
 
     def _run_connected(self, entry: CommandEntry, values: dict[str, str | bool]) -> None:
         try:
@@ -422,7 +449,17 @@ class CommandbookApp(App[None]):
             return
         self._connector_blocked = False
         self._update_connection_status()
+        self._handle_exit(entry, values, code)
+
+    def _handle_exit(
+        self,
+        entry: CommandEntry,
+        values: dict[str, str | bool],
+        code: int,
+    ) -> None:
         self.notify(f"Exited with code {code}")
+        if code != 0 and entry.command.placeholders:
+            self._launch(entry, initial_values=values)
 
     def action_select_connector(self) -> None:
         self.push_screen(ConnectorPickerScreen(self.connectors), self._apply_connector_request)
