@@ -32,6 +32,7 @@ def test_load_example_config():
 
     filters = commands["aws-ec2-list"].placeholder("filters")
     assert filters is not None and filters.type == "bare" and filters.escape is False
+    assert commands["git-log"].nocache is True
     assert config.connectors["production"].command == "ssh production"
     assert config.connectors["production"].persistent is True
 
@@ -42,6 +43,9 @@ def test_yaml_and_toml_examples_define_the_same_commands():
 
     assert [command.id for _, command in yaml_config.iter_commands()] == [
         command.id for _, command in toml_config.iter_commands()
+    ]
+    assert [(command.id, command.nocache) for _, command in yaml_config.iter_commands()] == [
+        (command.id, command.nocache) for _, command in toml_config.iter_commands()
     ]
 
 

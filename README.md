@@ -85,6 +85,7 @@ reference.
 | `description` | no | Longer searchable description. |
 | `tags` | no | Searchable tags, e.g. `[build, image]`. |
 | `severity` | no | `none` (default), `medium`, or `high`; `high` requires confirmation. |
+| `nocache` | no | Disable persistent form values for this command; defaults to `false`. |
 | `template` | yes* | Default command template. |
 | `shells` | no | Per-shell/dialect templates: `bash`, `sh`, `dash`, `zsh`, `ksh`, `powershell`, `cmd`, `posix`, `default`. |
 | `cwd` | no | Local cwd without a connector; remote cwd with a connector. |
@@ -251,6 +252,33 @@ groups:
 ```
 
 Undeclared `${name}` references become required `string` placeholders automatically.
+
+## Form value cache and retries
+
+Commandbook remembers form fields that you edit and restores them the next time the
+same command is opened, including after restarting the application. Values are stored
+locally in `~/.commandbook_cache`.
+
+Configured placeholder `default` values are not written merely because a form is
+opened or submitted. Once you edit a field, its submitted value becomes cacheable even
+if you change it back to the configured default.
+
+Set `nocache: true` on a command when its form values should neither be loaded from nor
+written to the persistent cache:
+
+```yaml
+groups:
+  - name: Secrets
+    commands:
+      - id: one-time-login
+        name: One-time login
+        nocache: true
+        template: 'login --token ${token}'
+```
+
+When a command returns a non-zero exit code, its form opens again with the values from
+that attempt so they can be corrected and retried. These temporary retry values work
+even with `nocache: true`; they are not persistent-cache reads.
 
 ## Navigation
 

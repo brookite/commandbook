@@ -66,6 +66,7 @@ groups:
         name: Commit history
         description: Show recent commits in one-line format
         tags: [history, vcs]
+        nocache: true
         template: 'git log --oneline[[ -n ${limit}]]'
         placeholders:
           - name: limit
